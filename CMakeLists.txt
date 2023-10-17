@@ -16,7 +16,7 @@ add_executable(floriquiz
 pico_generate_pio_header(floriquiz ${CMAKE_CURRENT_LIST_DIR}/neopixel.pio)
 
 # Add pico_stdlib library which aggregates commonly used features
-target_link_libraries(floriquiz pico_stdlib hardware_pio)
+target_link_libraries(floriquiz pico_stdlib pico_multicore hardware_pio)
 
 # create map/bin/hex/uf2 file in addition to ELF.
 pico_add_extra_outputs(floriquiz)
