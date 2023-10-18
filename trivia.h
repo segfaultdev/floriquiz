@@ -21,5 +21,6 @@ struct trivia_t {
 };
 
 extern const trivia_t trivia_set_a[], trivia_set_b[];
+extern const uint trivia_count_a, trivia_count_b;
 
 #endif

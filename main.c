@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "pico/multicore.h"
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
@@ -9,6 +11,11 @@
 
 bool last_inputs[4];
 bool inputs[4];
+
+const trivia_t *trivia_set;
+uint trivia_count;
+
+uint diff_level = 1;
 
 uint get_lcd_mask(uint data, bool rs, bool rw, bool en) {
   uint mask = (data & 0xFF) << 14;
@@ -30,23 +37,29 @@ uint get_lcd_mask(uint data, bool rs, bool rw, bool en) {
 
 void lcd_send(uint data, bool rs) {
   gpio_put_masked(LCD_MASK, get_lcd_mask(data, rs, false, true));
-  sleep_ms(1);
+  sleep_us(50);
   
   gpio_put(28, false);
-  sleep_ms(2);
+  
+  if (!rs && data < 0x04) {
+    sleep_ms(2);
+  } else {
+    sleep_us(50);
+  }
 }
 
 void lcd_hispanify(void) {
   lcd_send(0x40, false);
   
   const unsigned char font[] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    
     0x02, 0x04, 0x0E, 0x01, 0x0F, 0x11, 0x0F, 0x00,
     0x02, 0x04, 0x0E, 0x11, 0x1F, 0x10, 0x0E, 0x00,
     0x02, 0x04, 0x04, 0x0C, 0x04, 0x04, 0x0E, 0x00,
     0x02, 0x04, 0x0E, 0x11, 0x11, 0x11, 0x0E, 0x00,
     0x02, 0x04, 0x11, 0x11, 0x11, 0x13, 0x0D, 0x00,
+    0x13, 0x15, 0x11, 0x11, 0x11, 0x11, 0x0E, 0x00,
+    
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     
     0x04, 0x00, 0x04, 0x08, 0x10, 0x11, 0x0E, 0x00,
   };
@@ -66,19 +79,78 @@ void lcd_home(void) {
   lcd_send(0x02, false);
 }
 
+void lcd_show(void) {
+  lcd_send(0x0D, false);
+}
+
+void lcd_hide(void) {
+  lcd_send(0x0C, false);
+}
+
 void lcd_goto(uint x, uint y) {
   lcd_send(0x80 + (x + y * 64), false);
 }
 
-void lcd_write(const char *text) {
-  while (*text) {
-    lcd_send(*text, true);
-    text++;
+uint lcd_write(const char *text, uint delay_ms) {
+  uint length = 0;
+  
+  while (text[length]) {
+    length++;
   }
+  
+  while (length) {
+    if (text[length - 1] == ' ') {
+      length--;
+    } else {
+      break;
+    }
+  }
+  
+  for (uint i = 0; i < length; i++) {
+    if ((unsigned char)(*text) == 0xC2) {
+      text++;
+      
+      if ((unsigned char)(*text) == 0xBF) {
+        lcd_send(7, true);
+      }
+    } else if ((unsigned char)(*text) == 0xC3) {
+      text++;
+      
+      if ((unsigned char)(*text) == 0xB1) {
+        lcd_send(0xEE, true);
+      } else if ((unsigned char)(*text) == 0xA1) {
+        lcd_send(0, true);
+      } else if ((unsigned char)(*text) == 0xA9) {
+        lcd_send(1, true);
+      } else if ((unsigned char)(*text) == 0xAD) {
+        lcd_send(2, true);
+      } else if ((unsigned char)(*text) == 0xB3) {
+        lcd_send(3, true);
+      } else if ((unsigned char)(*text) == 0xBA) {
+        lcd_send(4, true);
+      } else if ((unsigned char)(*text) == 0x9A) {
+        lcd_send(5, true);
+      }
+    } else {
+      lcd_send(*text, true);
+    }
+    
+    text++;
+    
+    if (delay_ms) {
+      sleep_ms(delay_ms);
+    }
+  }
+  
+  return length;
 }
 
 bool input_pressed(uint input) {
   return (inputs[input] && !last_inputs[input]);
+}
+
+bool input_released(uint input) {
+  return (!inputs[input] && last_inputs[input]);
 }
 
 void input_refresh(void) {
@@ -86,87 +158,8 @@ void input_refresh(void) {
     last_inputs[i - 10] = inputs[i - 10];
     inputs[i - 10] = !gpio_get(i);
   }
-}
-
-uint trivia_write(const char *text) {
-  uint count = 0;
   
-  while (*text) {
-    if ((unsigned char)(*text) == 0xC2) {
-      text++;
-      
-      if ((unsigned char)(*text) == 0xBF) {
-        lcd_send(6, true);
-      }
-    } else if ((unsigned char)(*text) == 0xC3) {
-      text++;
-      
-      if ((unsigned char)(*text) == 0xB1) {
-        lcd_send(0, true);
-      } else if ((unsigned char)(*text) == 0xA1) {
-        lcd_send(1, true);
-      } else if ((unsigned char)(*text) == 0xA9) {
-        lcd_send(2, true);
-      } else if ((unsigned char)(*text) == 0xAD) {
-        lcd_send(3, true);
-      } else if ((unsigned char)(*text) == 0xB3) {
-        lcd_send(4, true);
-      } else if ((unsigned char)(*text) == 0xBA) {
-        lcd_send(5, true);
-      }
-    } else {
-      lcd_send(*text, true);
-    }
-    
-    count++, text++;
-    sleep_ms(20);
-  }
-  
-  return count;
-}
-
-void trivia_show_option(const char *text) {
-  lcd_send(0x0D, false);
-  lcd_goto(0, 1);
-  
-  uint count = trivia_write(text);
-  
-  lcd_send(0x0C, false);
-  sleep_ms(1000);
-  
-  lcd_send(0x0D, false);
-  lcd_goto(0, 1);
-  
-  while (count--) {
-    lcd_send(' ', true);
-    sleep_ms(20);
-  }
-  
-  lcd_send(0x0C, false);
-}
-
-bool trivia_show(const trivia_t trivia) {
-  lcd_send(0x0D, false);
-  lcd_clear();
-  
-  trivia_write(trivia.text);
-  
-  lcd_send(0x0C, false);
-  sleep_ms(2000);
-  
-  for (uint i = 0; i < 4; i++) {
-    trivia_show_option(trivia.options_long[i]);
-  }
-  
-  sleep_ms(2000);
-  
-  /* TODO: Show options in short form, all uppercase! */
-  
-  /* TODO: Read input and return true or false. */
-  
-  /* TODO: Change light colors depending on state (set up FIFO too). */
-  
-  return false;
+  rand();
 }
 
 void core1_main(void) {
@@ -197,12 +190,14 @@ void core1_main(void) {
   
   /* The following properties can be changed by commands in the FIFO: */
   
-  int mode = 3; // 0 = Fixed, 1 = Balls, 2 = Runs, 3 = Christmas
-  int speed = 17; // This speed directly marks the speed of all animations!
+  int mode = 0; // 0 = Fixed, 1 = Balls, 2 = Runs, 3 = Christmas
+  int speed = 16; // This speed directly marks the speed of all animations!
   
-  int red_0 = 255, green_0 = 127, blue_0 = 0; // Primary color
-  int red_1 = 0, green_1 = 127, blue_1 = 255; // Secondary color
-  int red_2 = 63, green_2 = 255, blue_2 = 63; // Tertiary color
+  int red_0 = 0, green_0 = 127, blue_0 = 255; // Primary color
+  int red_1 = 63, green_1 = 191, blue_1 = 255; // Secondary color
+  int red_2 = 127, green_2 = 255, blue_2 = 255; // Tertiary color
+  
+  multicore_fifo_drain();
   
   while (true) {
     uint color_table[30];
@@ -425,11 +420,356 @@ void core1_main(void) {
       pio_sm_put_blocking(pio0, 0, color_table[i]);
     }
     
+    if (multicore_fifo_rvalid()) {
+      uint command = multicore_fifo_pop_blocking();
+      
+      uint red = ((command >> 16) & 0xFF);
+      uint green = ((command >> 8) & 0xFF);
+      uint blue = ((command >> 0) & 0xFF);
+      
+      uint color_select = ((command >> 24) & 3);
+      
+      mode = (int)((command >> 26) & 3);
+      speed = (int)((command >> 28) * 3 + 1);
+      
+      if (color_select == 0) {
+        red_0 = red;
+        green_0 = green;
+        blue_0 = blue;
+      } else if (color_select == 1) {
+        red_1 = red;
+        green_1 = green;
+        blue_1 = blue;
+      } else if (color_select == 2) {
+        red_2 = red;
+        green_2 = green;
+        blue_2 = blue;
+      }
+    }
+    
     sleep_ms(33);
   }
 }
 
+void neo_send(int mode, int speed, int color) {
+  const uint colors[] = {
+    0x007FFF, 0x3FBFFF, 0x7FFFFF,
+    0x00FF00, 0x2FFF2F, 0x5FFF5F,
+    0xFF7F00, 0xFF9F1F, 0xFFAF3F,
+    0x7F7F7F, 0xBFBFBF, 0xFFFFFF,
+    0x007FFF, 0x00FF00, 0xFF7F00,
+    0x00FF00, 0xFFFFFF, 0xFF00FF,
+    0xFF0000, 0xFF7F00, 0xFFBF00,
+    0xFF0000, 0x00FF00, 0x0000FF,
+  };
+  
+  multicore_fifo_push_blocking(0x00000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 0]);
+  multicore_fifo_push_blocking(0x01000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 1]);
+  multicore_fifo_push_blocking(0x02000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 2]);
+}
+
+void scene_led_test(void) {
+  lcd_clear();
+  
+  // Blue, Green, Orange, White, FloriQuiz, FloriStation, Spain, Rainbow
+  
+  const uint colors[] = {
+    0x007FFF, 0x3FBFFF, 0x7FFFFF,
+    0x00FF00, 0x2FFF2F, 0x5FFF5F,
+    0xFF7F00, 0xFF9F1F, 0xFFAF3F,
+    0x7F7F7F, 0xBFBFBF, 0xFFFFFF,
+    0x007FFF, 0x00FF00, 0xFF7F00,
+    0x00FF00, 0xFFFFFF, 0xFF00FF,
+    0xFF0000, 0xFF7F00, 0xFFBF00,
+    0xFF0000, 0x00FF00, 0x0000FF,
+  };
+  
+  lcd_write("------ Prueba de patrones WS2812B ------", 0);
+  
+  int mode = 1, speed = 6, color = 1;
+  bool display = true;
+  
+  while (true) {
+    if (display) {
+      lcd_goto(0, 1);
+      
+      lcd_write("\242Forma:", 0);
+      lcd_send(' ', true);
+      lcd_send(mode + '0', true);
+      lcd_write("\243", 0);
+      
+      lcd_goto(10, 1);
+      
+      lcd_write("\242Vel.:", 0);
+      lcd_send(' ', true);
+      lcd_send((speed / 10) + '0', true);
+      lcd_send((speed % 10) + '0', true);
+      lcd_write("\243", 0);
+      
+      lcd_goto(20, 1);
+      
+      lcd_write("\242Color:", 0);
+      lcd_send(' ', true);
+      lcd_send(color + '0', true);
+      lcd_write("\243", 0);
+      
+      lcd_goto(30, 1);
+      
+      lcd_write("\242Ir atrás\243", 0);
+      display = false;
+    }
+    
+    input_refresh();
+    
+    if (input_released(0)) {
+      mode = (mode % 4) + 1;
+      display = true;
+      
+      multicore_fifo_push_blocking(0x03000000 | ((speed - 1) << 28) | ((mode - 1) << 26));
+    }
+    
+    if (input_released(1)) {
+      speed = (speed % 16) + 1;
+      display = true;
+      
+      multicore_fifo_push_blocking(0x03000000 | ((speed - 1) << 28) | ((mode - 1) << 26));
+    }
+    
+    if (input_released(2)) {
+      color = (color % 8) + 1;
+      display = true;
+      
+      multicore_fifo_push_blocking(0x00000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 0]);
+      multicore_fifo_push_blocking(0x01000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 1]);
+      multicore_fifo_push_blocking(0x02000000 | ((speed - 1) << 28) | ((mode - 1) << 26) | colors[(color - 1) * 3 + 2]);
+    }
+    
+    if (input_released(3)) {
+      sleep_ms(500);
+      return;
+    }
+  }
+}
+
+int scene_trivia(const trivia_t trivia, uint timer) {
+  neo_send(2, 6, 1);
+  lcd_clear();
+  
+  lcd_write(trivia.text, 40);
+  sleep_ms(1000);
+  
+  for (uint i = 0; i < 4; i++) {
+    lcd_goto(0, 1);
+    
+    uint length = lcd_write(trivia.options_long[i], 33);
+    sleep_ms(1000);
+    
+    lcd_goto(0, 1);
+    
+    while (length--) {
+      lcd_send(' ', true);
+      sleep_ms(17);
+    }
+  }
+  
+  for (uint i = 0; i < 4; i++) {
+    lcd_goto(i * 10, 1);
+    
+    lcd_write("\176", 33);
+    lcd_write(trivia.options_short[i], 33);
+  }
+  
+  sleep_ms(500);
+  
+  while (true) {
+    input_refresh();
+    
+    if (inputs[0] && inputs[1] && inputs[2] && inputs[3]) {
+      lcd_clear();
+      
+      while (inputs[0] || inputs[1] || inputs[2] || inputs[3]) {
+        input_refresh();
+      }
+      
+      input_refresh();
+      return -1;
+    }
+    
+    for (uint i = 0; i < 4; i++) {
+      if (input_released(i)) {
+        bool correct = (trivia.answer == i);
+        neo_send(1, 6, correct ? 2 : 3);
+        
+        lcd_goto(trivia.answer * 10, 1);
+        lcd_show();
+        
+        sleep_ms(5000);
+        lcd_hide();
+        
+        return (correct ? 1 : 0);
+      }
+    }
+  }
+}
+
+void scene_quiz(void) {
+  // Timerless will run through all questions, with a 86400s (almost infinite) timer.
+  // Easy will run through 10 easy questions, with an 30s timer.
+  // Medium will run through 20 easy and medium questions, with a 12s timer.
+  // Hard will run though 30 easy, medium and hard questions, with a 6s timer.
+  
+  uint score = 0, count, timer;
+  
+  if (diff_level == 0) {
+    count = trivia_count;
+    timer = 86400;
+  } else if (diff_level == 1) {
+    count = 10;
+    timer = 30;
+  } else if (diff_level == 2) {
+    count = 20;
+    timer = 12;
+  } else if (diff_level == 3) {
+    count = 30;
+    timer = 6;
+  }
+  
+  uint indexes[count];
+  
+  for (uint i = 0; i < count; i++) {
+    uint index = rand() % trivia_count;
+    
+    trivia_loop: {
+      index = (index + 1) % trivia_count;
+      
+      if (diff_level > 0) {
+        if (diff_level - 1 < trivia_set[index].level) {
+          goto trivia_loop;
+        }
+      }
+      
+      for (uint j = 0; j < i; j++) {
+        if (indexes[j] == index) {
+          goto trivia_loop;
+        }
+      }
+    }
+    
+    neo_send(0, 6, 1);
+    lcd_clear();
+    
+    lcd_write("Pregunta #", 0);
+    lcd_send(' ', true);
+    lcd_send(((i + 1) / 100) % 10 + '0', true);
+    lcd_send(((i + 1) / 10) % 10 + '0', true);
+    lcd_send((i + 1) % 10 + '0', true);
+    lcd_write(" de", 0);
+    lcd_send(' ', true);
+    lcd_send((count / 100) % 10 + '0', true);
+    lcd_send((count / 10) % 10 + '0', true);
+    lcd_send(count % 10 + '0', true);
+    lcd_write("...", 0);
+    
+    sleep_ms(1000);
+    
+    int result = scene_trivia(trivia_set[index], timer);
+    indexes[i] = index;
+    
+    if (result < 0) {
+      return;
+    }
+    
+    score += result;
+  }
+  
+  neo_send(0, 6, 1);
+  lcd_clear();
+  
+  lcd_write("Se acertaron ", 0);
+  lcd_send(' ', true);
+  lcd_send((score / 100) % 10 + '0', true);
+  lcd_send((score / 10) % 10 + '0', true);
+  lcd_send(score % 10 + '0', true);
+  lcd_write(" de", 0);
+  lcd_send(' ', true);
+  lcd_send((count / 100) % 10 + '0', true);
+  lcd_send((count / 10) % 10 + '0', true);
+  lcd_send(count % 10 + '0', true);
+  lcd_write(".", 0);
+  
+  sleep_ms(2000);
+}
+
+void scene_main(void) {
+  const char *diff_table[] = {"TL", "EZ", "ME", "HA"};
+  
+  bool display = true;
+  
+  lcd_clear();
+  neo_send(3, 6, 1);
+  
+  while (true) {
+    if (display) {
+      lcd_write("-------------- FloriQuiz! --------------", 0);
+      lcd_goto(0, 1);
+      
+      lcd_write("\242Florida.\243", 0);
+      lcd_write("\242Cultural\243", 0);
+      lcd_write("\242Dif.:", 0);
+      lcd_send(' ', true);
+      lcd_write(diff_table[diff_level], 0);
+      lcd_write("\243", 0);
+      lcd_write("\242Patrones\243", 0);
+      
+      display = false;
+    }
+    
+    input_refresh();
+    
+    if (input_released(0)) {
+      trivia_set = trivia_set_a;
+      trivia_count = trivia_count_a;
+      
+      sleep_ms(500);
+      scene_quiz();
+      
+      lcd_clear();
+      neo_send(3, 6, 1);
+      
+      display = true;
+    }
+    
+    if (input_released(1)) {
+      trivia_set = trivia_set_b;
+      trivia_count = trivia_count_b;
+      
+      sleep_ms(500);
+      scene_quiz();
+      
+      lcd_clear();
+      neo_send(3, 6, 1);
+      
+      display = true;
+    }
+    
+    if (input_released(2)) {
+      diff_level = (diff_level + 1) % 4;
+      display = true;
+    }
+    
+    if (input_released(3)) {
+      sleep_ms(500);
+      scene_led_test();
+      
+      lcd_clear();
+      display = true;
+    }
+  }
+}
+
 int main(void) {
+  srand(0);
+  
   uint offset = pio_add_program(pio0, &neopixel_program);
   neopixel_program_init(pio0, 0, offset, 22, 1000000, false);
   
@@ -462,30 +802,6 @@ int main(void) {
   
   /* --- */
   
-  while (true) {
-    /*
-    if (input_pressed(0)) {
-      lcd_write("A");
-    }
-    
-    if (input_pressed(1)) {
-      lcd_write("B");
-    }
-    
-    if (input_pressed(2)) {
-      lcd_write("C");
-    }
-    
-    if (input_pressed(3)) {
-      // lcd_write("D");
-      lcd_send(0x18, false);
-    }
-    
-    input_refresh();
-    */
-    
-    trivia_show(trivia_set_a[0]);
-  }
-  
+  scene_main();
   return 0;
 }
